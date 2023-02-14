@@ -12,42 +12,39 @@ impl BuySellQueue {
             buy_orders: VecDeque::new() 
         }
     }
-
-    fn add_order(mut self, order_id: i32, is_buy_order: bool) {
-        if is_buy_order { self.buy_orders.push_back(order_id) }
-        else { self.sell_orders.push_back(order_id) }
-    }
 }
 
-struct Orderbook<'a> {
+pub struct Orderbook<'a> {
     security: &'a Security,
+    starting_price: i32,
     current_market_price: i32,
-    best_bid: i32, 
-    best_ask: i32,
-    worst_bid: i32,
-    worst_ask: i32,
+    best_bid: i32,  // the lowest price a buy order gets placed
+    best_ask: i32,  // the hightest price a sell order gets placed
+    worst_bid: i32, // the highest price a buy order gets placed
+    worst_ask: i32, // the lowest price a sell order gets placed
     order_map: HashMap<i32, Order<'a>>,
-    at_market_orders: BuySellQueue,
+    at_market_orders: VecDeque<i32>,
     limit_orders: VecDeque<BuySellQueue>,
 }
 
 impl <'a> Orderbook<'a> {
-    fn new(security: &'a Security, ) -> Self {
+    fn new(security: &'a Security, starting_price: i32) -> Self {
         Orderbook {
             security,
-            current_market_price: 0,
+            starting_price,
+            current_market_price: starting_price,
             best_bid: 0,
             best_ask: 0,
             worst_bid: 0,
             worst_ask: 0,
             order_map: HashMap::new(),
-            at_market_orders: BuySellQueue::new(),
+            at_market_orders: VecDeque::new(),
             limit_orders: VecDeque::new(),
         }
     }
 
     fn place_order(&mut self, mut order: Order<'a>) -> Result<i32, OrderError> {
-        // TODO: Additional check, so that the limit is not to far away from the current level
+        if order.amount <= 0 { return Err(OrderError("Order amount must be greater than zero".to_string())); }
 
         let new_order_id = 1;
         order.order_id = new_order_id;
@@ -56,6 +53,8 @@ impl <'a> Orderbook<'a> {
         self.order_map.insert(new_order_id, order);
 
         if let Some(limit) = order_limit {
+            if limit <= 0 { return Err(OrderError("Limit must be greater than zero".to_string())); }
+
             if is_buy_order {
                 if limit < self.best_bid {
                     let mut bsq = BuySellQueue::new();
@@ -100,8 +99,7 @@ impl <'a> Orderbook<'a> {
 
         }
 
-        if is_buy_order { self.at_market_orders.buy_orders.push_back(new_order_id); }
-        else { self.at_market_orders.sell_orders.push_back(new_order_id); }
+        self.at_market_orders.push_back(new_order_id);
 
         Ok(new_order_id)
     }
@@ -114,13 +112,21 @@ impl <'a> Orderbook<'a> {
     }
 
     fn execute(&mut self) {
-        // event based execution, so on every placement, one execution round has to be done
+        /* 
+        It is inefficient to go through every order. Assuming, an order has been placed at price level something in the middle of the best and worst
+        then it is useless to trigger the execution loop.
+
+        Cases to trigger the execution loop
+        ===================================
+        1. New "at market" order is placed.
+        2. A buy limit order with a new best bid is placed.
+        3. A sell limit order with a new best ask is placed.
+        */
 
     }
 
 
 }
-
 struct OrderError(String);
 
 impl fmt::Display for OrderError {
