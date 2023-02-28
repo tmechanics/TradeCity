@@ -11,8 +11,8 @@ pub struct Orderbook<'a> {
     order_map: HashMap<i64, Order<'a>>,
     buy_at_market_orders: VecDeque<i64>,
     sell_at_market_orders: VecDeque<i64>,
-    buy_limit_orders: VecDeque<i64>,
-    sell_limit_orders: VecDeque<i64>,
+    buy_limit_orders: VecDeque<VecDeque<i64>>,
+    sell_limit_orders: VecDeque<VecDeque<i64>>,
     number_buy_limit_orders: u32,
     number_sell_limit_orders: u32,
 }
@@ -50,42 +50,64 @@ impl <'a> Orderbook<'a> {
             if limit <= 0 { return Err("Limit must be greater than zero".to_string()); }
 
             if is_buy_order {
-                if limit < self.best_bid {
-                    self.buy_limit_orders.push_front(new_order_id);
+                if limit > self.best_bid {
+                    let mut queue = VecDeque::new();
+                    queue.push_back(new_order_id);
+                    self.buy_limit_orders.push_front(queue);
                     self.number_buy_limit_orders += 1;
                     self.best_bid = limit;
                     return Ok((new_order_id, MatchingSignal::NewLowestBid));
                 }
 
-                if limit > self.worst_bid {
+                if limit < self.worst_bid {
                     if self.worst_bid * 12 < self.current_market_price * 10 { return Err("Limit is too far away from current market price.".to_string()); }
-                    self.buy_limit_orders.push_back(new_order_id);
+                    let mut queue = VecDeque::new();
+                    queue.push_back(new_order_id);
+                    self.buy_limit_orders.push_back(queue);
                     self.number_buy_limit_orders += 1;
                     self.worst_bid = limit;
                     return Ok((new_order_id, MatchingSignal::NoOperation));
                 }
 
                 let index = limit - self.best_bid;
-                self.buy_limit_orders.insert(index.try_into().unwrap(), new_order_id);
+                if let Some(subqueue) = self.buy_limit_orders.get_mut(index.try_into().unwrap()) {
+                    subqueue.push_back(new_order_id);    
+                } else {
+                    let mut queue = VecDeque::new();
+                    queue.push_back(new_order_id);
+                    self.buy_limit_orders.insert(index.try_into().unwrap(), queue);
+                }
+                
                 return Ok((new_order_id, MatchingSignal::NoOperation));
             }
 
             if limit < self.best_ask {
-                self.sell_limit_orders.push_front(new_order_id);
+                let mut queue = VecDeque::new();
+                queue.push_back(new_order_id);
+                self.sell_limit_orders.push_front(queue);
                 self.number_sell_limit_orders += 1;
                 self.best_ask = limit;
                 return Ok((new_order_id, MatchingSignal::NewHighestAsk));
             }
 
             if limit > self.worst_ask {
-                self.sell_limit_orders.push_back(new_order_id);
+                let mut queue = VecDeque::new();
+                queue.push_back(new_order_id);
+                self.sell_limit_orders.push_back(queue);
                 self.number_sell_limit_orders += 1;
                 self.worst_ask = limit;
                 return Ok((new_order_id, MatchingSignal::NoOperation));
             }
 
             let index = limit - self.best_ask;
-            self.buy_limit_orders.insert(index.try_into().unwrap(), new_order_id);
+            if let Some(subqueue) = self.sell_limit_orders.get_mut(index.try_into().unwrap()) {
+                subqueue.push_back(new_order_id);
+            } else {
+                let mut queue = VecDeque::new();
+                queue.push_back(new_order_id);
+                self.sell_limit_orders.insert(index.try_into().unwrap(), queue);
+            }
+
             return Ok((new_order_id, MatchingSignal::NoOperation));
         }
 
@@ -116,35 +138,9 @@ impl <'a> Orderbook<'a> {
                 return Ok(order_id)
             },
             Err(error_text) => Err(error_text),
-            _ => Err("Something went wrong".to_string())
         }
     }
 
-    /// This functions triggers the execution loop. 
-    /// 
-    /// TRIGGER OF THE EXECUTION MUST HAPPEN AFTER THE PLACEMENT FUNCTION HAS SUCCESSFULLY FINISHED.
-    /// 
-    /// Maybe it is possible to make the order lookup more efficient. Since the order IDs are sequential, the store for 
-    /// the order metadata could be an array. 
-    /// 
-    /// It is inefficient to go through every order. Assuming an order has been placed at a price level somewhere in the middle of 
-    /// best and worst, then it is useless to trigger the execution loop.
-    /// 
-    /// With the separation of buy orders and sell orders, it is possible to avoid unnecessary reads of orders that are not even 
-    /// relevant for the execution round. To make this work, the execution round needs a signal in form which tells, what order type 
-    /// was entered, so that it handles the right scenario.
-    /// 
-    /// **Cases to trigger the execution loop**
-    /// 1. New buy "at market" order is placed, when there are sell limit orders.
-    /// 2. New sell "at market" order is placed, when there are buy limit orders.
-    /// 3. A buy limit order with a new best bid is placed.
-    /// 4. A sell limit order with a new best ask is placed.
-    ///
-    /// **IMPORTANT**: Market orders are not matched against.
-    /// 
-    /// Matching signal BuyAtMarket:
-    /// 
-    /// 
     fn start_execution_round(&mut self, matching_signal: MatchingSignal) -> Result<Vec<Execution>, String> {
         match matching_signal {
             MatchingSignal::BuyAtMarket => Ok(vec![]),  
